@@ -76,7 +76,7 @@ namespace PatchKit.Unity.Patcher.AppData.Remote
                     DebugLogger.LogException(exception);
                     return false;
                 }
-                catch (DownloaderException exception)
+                catch (ResourceDownloaderException exception)
                 {
                     DebugLogger.LogException(exception);
                     return false;

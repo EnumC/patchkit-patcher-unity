@@ -94,7 +94,7 @@ public class RemoteResourceDownloaderTest
         var chunkedHttpDownloader = Substitute.For<IChunkedHttpDownloader>();
         var torrentDownloader = Substitute.For<ITorrentDownloader>();
         torrentDownloader.When(t => t.Download(CancellationToken.Empty)).Do(
-            info => { throw new DownloaderException("Test.", DownloaderExceptionStatus.Other); });
+            info => { throw new ResourceDownloaderException("Test"); });
 
         var downloader = new RemoteResourceDownloader(_filePath, resource, true,
             (path, remoteResource, timeout) => httpDownloader,

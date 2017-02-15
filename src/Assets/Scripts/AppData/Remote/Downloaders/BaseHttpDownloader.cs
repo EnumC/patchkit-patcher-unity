@@ -1,4 +1,5 @@
-﻿using System.IO;
+﻿using System;
+using System.IO;
 using System.Net;
 using PatchKit.Unity.Patcher.Cancellation;
 using PatchKit.Unity.Patcher.Debug;
@@ -7,110 +8,36 @@ namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
 {
     public sealed class BaseHttpDownloader : IBaseHttpDownloader
     {
-        public delegate IHttpWebRequestAdapter CreateNewHttpWebRequest(string url);
-
         private static readonly DebugLogger DebugLogger = new DebugLogger(typeof(BaseHttpDownloader));
 
-        private readonly string _url;
-        private readonly int _bufferSize;
-        private readonly CreateNewHttpWebRequest _createNewHttpWebRequest;
-        private readonly byte[] _buffer;
-        private readonly int _timeout;
-
-        private IHttpWebRequestAdapter _request;
+        private readonly IHttpWebRequestAdapterFactory _httpWebRequestAdapterFactory;
 
         private bool _downloadHasBeenCalled;
         private long _bytesRangeStart;
-        private long _bytesRangeEnd = -1;
+        private long _bytesRangeEnd;
 
-        public event DataAvailableHandler DataAvailable;
+        private string _url;
+        private IHttpWebRequestAdapter _request;
+        private IHttpWebResponseAdapter _response;
 
-        public BaseHttpDownloader(string url, int timeout, int bufferSize = 1024) : 
-            this(url, timeout, bufferSize, CreateDefaultHttpWebRequest)
+        public BaseHttpDownloader(int timeout) :
+            this(new HttpWebRequestAdapterFactory(timeout))
         {
         }
 
-        public BaseHttpDownloader(string url, int timeout, int bufferSize,
-            CreateNewHttpWebRequest createNewHttpWebRequest)
+        public BaseHttpDownloader(IHttpWebRequestAdapterFactory httpWebRequestAdapterFactory)
         {
-            Checks.ArgumentNotNullOrEmpty(url, "url");
-            Checks.ArgumentMoreThanZero(timeout, "timeout");
-            Checks.ArgumentMoreThanZero(bufferSize, "bufferSize");
-            AssertChecks.ArgumentNotNull(createNewHttpWebRequest, "createNewHttpWebRequest");
+            AssertChecks.ArgumentNotNull(httpWebRequestAdapterFactory, "httpWebRequestAdapterFactory");
 
             DebugLogger.LogConstructor();
-            DebugLogger.LogVariable(url, "url");
-            DebugLogger.LogVariable(timeout, "timeout");
-            DebugLogger.LogVariable(bufferSize, "bufferSize");
 
-            _url = url;
-            _timeout = timeout;
-            _bufferSize = bufferSize;
-            _createNewHttpWebRequest = createNewHttpWebRequest;
-            _buffer = new byte[_bufferSize];
+            _httpWebRequestAdapterFactory = httpWebRequestAdapterFactory;
 
-            ServicePointManager.ServerCertificateValidationCallback =
-                (sender, certificate, chain, errors) => true;
-            ServicePointManager.DefaultConnectionLimit = 65535;
+            _bytesRangeStart = 0;
+            _bytesRangeEnd = -1;
         }
 
-        private void CreateRequest()
-        {
-            DebugLogger.Log("Creating request");
-
-            _request = _createNewHttpWebRequest(_url);
-            _request.Method = "GET";
-            _request.Timeout = _timeout;
-            _request.AddRange(_bytesRangeStart, _bytesRangeEnd);
-        }
-
-        private void VerifyResponse(IHttpWebResponseAdapter response)
-        {
-            DebugLogger.Log("Veryfing response");
-
-            if (response.StatusCode == HttpStatusCode.NotFound)
-            {
-                throw new DownloaderException("Resource not found - " + _url, DownloaderExceptionStatus.NotFound);
-            }
-
-            if (response.StatusCode != HttpStatusCode.OK && response.StatusCode != HttpStatusCode.PartialContent)
-            {
-                throw new DownloaderException(
-                    "Resource request returned status code " + response.StatusCode + " - " + _url,
-                    DownloaderExceptionStatus.Other);
-            }
-        }
-
-        private void ProcessResponse(IHttpWebResponseAdapter response, CancellationToken cancellationToken)
-        {
-            DebugLogger.Log("Processing response");
-
-            using (var responseStream = response.GetResponseStream())
-            {
-                if (responseStream == null)
-                {
-                    throw new DownloaderException("Resource response stream is null - " + _url,
-                        DownloaderExceptionStatus.EmptyStream);
-                }
-
-                ProcessStream(responseStream, cancellationToken);
-            }
-        }
-
-        private void ProcessStream(Stream responseStream, CancellationToken cancellationToken)
-        {
-            DebugLogger.Log("Processing stream");
-
-            int bufferRead;
-            while ((bufferRead = responseStream.Read(_buffer, 0, _bufferSize)) > 0)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                OnDataAvailable(_buffer, bufferRead);
-            }
-        }
-
-        public void SetBytesRange(long bytesRangeStart, long bytesRangeEnd = -1L)
+        public void SetBytesRange(long bytesRangeStart, long bytesRangeEnd)
         {
             DebugLogger.Log("Setting bytes range.");
 
@@ -121,33 +48,100 @@ namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
             _bytesRangeEnd = bytesRangeEnd;
         }
 
-        public void Download(CancellationToken cancellationToken)
+        public Stream GetDownloadStream(string url, CancellationToken cancellationToken)
         {
             AssertChecks.MethodCalledOnlyOnce(ref _downloadHasBeenCalled, "Download");
+            Checks.ArgumentNotNullOrEmpty(url, "url");
 
             DebugLogger.Log("Downloading.");
+            DebugLogger.LogVariable(url, "url");
+
+            _url = url;
 
             CreateRequest();
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            DebugLogger.Log("Retrieving response from request");
+            RetrieveResponse();
+            VerifyResponse();
+            return RetrieveResponseStream();
+        }
 
-            using (var response = _request.GetResponse())
+        private void CreateRequest()
+        {
+            DebugLogger.Log("Creating request.");
+
+            _request = _httpWebRequestAdapterFactory.CreateGetRequest(_url);
+            _request.AddRange(_bytesRangeStart, _bytesRangeEnd);
+        }
+
+        private void RetrieveResponse()
+        {
+            DebugLogger.Log("Retrieving response from request.");
+
+            try
             {
-                VerifyResponse(response);
-                ProcessResponse(response, cancellationToken);
+                _response = _request.GetResponse();
+            }
+            catch (WebException webException)
+            {
+                if (webException.Status == WebExceptionStatus.Timeout)
+                {
+                    throw new BaseHttpDownloaderException(string.Format("Timeout <{0}>.", _url), BaseHttpDownloaderExceptionType.Timeout);
+                }
+
+                throw new BaseHttpDownloaderException(string.Format("Connection error '{0}' <{1}>.", webException.Status,
+                    _url), BaseHttpDownloaderExceptionType.NetworkError, webException);
             }
         }
 
-        private void OnDataAvailable(byte[] bytes, int length)
+        private void VerifyResponse()
         {
-            if (DataAvailable != null) DataAvailable(bytes, length);
+            DebugLogger.Log("Veryfing response.");
+
+            if (_response.StatusCode == HttpStatusCode.NotFound)
+            {
+                throw new BaseHttpDownloaderException(string.Format("Resource not found <{0}>.", _url),
+                    BaseHttpDownloaderExceptionType.ResourceNotFound);
+            }
+
+            if (_response.StatusCode != HttpStatusCode.OK && _response.StatusCode != HttpStatusCode.PartialContent)
+            {
+                throw new BaseHttpDownloaderException(
+                    string.Format("Unexpected server response '{0} ({1})' <{2}>. ", _response.StatusCode,
+                        (int) _response.StatusCode,
+                        _url),
+                    BaseHttpDownloaderExceptionType.UnexpectedServerResponse);
+            }
         }
 
-        private static IHttpWebRequestAdapter CreateDefaultHttpWebRequest(string url)
+        private Stream RetrieveResponseStream()
         {
-            return new HttpWebRequestAdapter((HttpWebRequest)WebRequest.Create(url));
+            DebugLogger.Log("Retrieving stream.");
+
+            return _response.GetResponseStream();
+        }
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        ~BaseHttpDownloader()
+        {
+            Dispose(false);
+        }
+
+        private void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                if (_response != null)
+                {
+                    _response.Dispose();
+                }
+            }
         }
     }
 }

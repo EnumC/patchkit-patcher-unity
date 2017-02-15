@@ -15,6 +15,8 @@ namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
     {
         private const int RetriesAmount = 100;
 
+        private const int BufferSize = 1024;
+
         private static readonly DebugLogger DebugLogger = new DebugLogger(typeof(HttpDownloader));
 
         private readonly string _destinationFilePath;
@@ -22,6 +24,8 @@ namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
         private readonly RemoteResource _resource;
 
         private readonly int _timeout;
+
+        private readonly byte[] _buffer;
 
         private FileStream _fileStream;
 
@@ -45,13 +49,15 @@ namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
             _destinationFilePath = destinationFilePath;
             _resource = resource;
             _timeout = timeout;
+
+            _buffer = new byte[BufferSize];
         }
 
         private void OpenFileStream()
         {
             if (_fileStream == null)
             {
-                _fileStream = new FileStream(_destinationFilePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                _fileStream = new FileStream(_destinationFilePath, FileMode.Create, FileAccess.Write, FileShare.None);
             }
         }
 
@@ -99,23 +105,19 @@ namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
                         DebugLogger.LogException(validationException);
                         validUrls.Remove(url);
                     }
-                    catch (DownloaderException downloaderException)
+                    catch (BaseHttpDownloaderException e)
                     {
-                        DebugLogger.LogException(downloaderException);
-                        switch (downloaderException.Status)
+                        DebugLogger.LogException(e);
+                        switch (e.Type)
                         {
-                            case DownloaderExceptionStatus.EmptyStream:
+                            case BaseHttpDownloaderExceptionType.UnexpectedServerResponse:
+                            case BaseHttpDownloaderExceptionType.Timeout:
+                            case BaseHttpDownloaderExceptionType.NetworkError:
                                 // try another one
                                 break;
-                            case DownloaderExceptionStatus.CorruptData:
-                                // try another one
-                                break;
-                            case DownloaderExceptionStatus.NotFound:
+                            case BaseHttpDownloaderExceptionType.ResourceNotFound:
                                 // remove url and try another one
                                 validUrls.Remove(url);
-                                break;
-                            case DownloaderExceptionStatus.Other:
-                                // try another one
                                 break;
                             default:
                                 throw new ArgumentOutOfRangeException();
@@ -133,10 +135,10 @@ namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
 
             if (retry <= 0)
             {
-                throw new DownloaderException("Too many retries, aborting.", DownloaderExceptionStatus.Other);
+                throw new ResourceDownloaderException("Too many retries, aborting.");
             }
 
-            throw new DownloaderException("Cannot download resource.", DownloaderExceptionStatus.Other);
+            throw new ResourceDownloaderException("Cannot download resource.");
         }
 
         private void Download(string url, CancellationToken cancellationToken)
@@ -147,16 +149,21 @@ namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
 
             long downloadedBytes = 0;
 
-            BaseHttpDownloader baseHttpDownloader = new BaseHttpDownloader(url, _timeout);
-            baseHttpDownloader.DataAvailable += (bytes, length) =>
+            IBaseHttpDownloader baseHttpDownloader = new BaseHttpDownloader(_timeout);
+
+            using (var downloadStream = baseHttpDownloader.GetDownloadStream(url, cancellationToken))
             {
-                _fileStream.Write(bytes, 0, length);
+                int length;
+                while ((length = downloadStream.Read(_buffer, 0, BufferSize)) > 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                downloadedBytes += length;
-                OnDownloadProgressChanged(downloadedBytes, _resource.Size);
-            };
+                    _fileStream.Write(_buffer, 0, length);
 
-            baseHttpDownloader.Download(cancellationToken);
+                    downloadedBytes += length;
+                    OnDownloadProgressChanged(downloadedBytes, _resource.Size);
+                }
+            }
         }
 
         private void ClearFileStream()

@@ -14,26 +14,34 @@ namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
             _httpWebRequest = httpWebRequest;
         }
 
-        public IHttpWebResponseAdapter GetResponse()
-        {
-            return new HttpWebResponseAdapter((HttpWebResponse)_httpWebRequest.GetResponse());
-        }
-
-        public string Method
-        {
-            get { return _httpWebRequest.Method; }
-            set { _httpWebRequest.Method = value; }
-        }
-
-        public int Timeout
-        {
-            get { return _httpWebRequest.Timeout; }
-            set { _httpWebRequest.Timeout = value; }
-        }
-
         public void AddRange(long start, long end)
         {
             _httpWebRequest.AddRange(start, end);
+        }
+
+        public IHttpWebResponseAdapter GetResponse()
+        {
+            // Why catch and retreive response from exception - http://stackoverflow.com/a/14385202
+
+            WebResponse response;
+
+            try
+            {
+                response = _httpWebRequest.GetResponse();
+            }
+            catch (WebException webException)
+            {
+                if (webException.Response != null && webException.Status == WebExceptionStatus.ProtocolError)
+                {
+                    response = webException.Response;
+                }
+                else
+                {
+                    throw;
+                }
+            }
+
+            return new HttpWebResponseAdapter((HttpWebResponse)response);
         }
     }
 }

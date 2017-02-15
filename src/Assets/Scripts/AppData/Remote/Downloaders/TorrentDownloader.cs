@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using Newtonsoft.Json.Linq;
-using PatchKit.Unity.Patcher.AppData.Local;
 using PatchKit.Unity.Patcher.Cancellation;
 using PatchKit.Unity.Patcher.Debug;
 using UnityEngine;
@@ -80,13 +79,21 @@ namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
 
             using (var torrentFileStream = new FileStream(TorrentFilePath, FileMode.Create))
             {
-                var baseHttpDownloader = new BaseHttpDownloader(_resource.TorrentUrls[0], _timeout);
-                baseHttpDownloader.DataAvailable += (data, length) =>
+                const int bufferSize = 1024;
+                byte[] buffer = new byte[bufferSize];
+
+                var baseHttpDownloader = new BaseHttpDownloader(_timeout);
+
+                using (var downloadStream = baseHttpDownloader.GetDownloadStream(_resource.TorrentUrls[0], cancellationToken))
                 {
-                    // ReSharper disable once AccessToDisposedClosure
-                    torrentFileStream.Write(data, 0, length);
-                };
-                baseHttpDownloader.Download(cancellationToken);
+                    int length;
+                    while ((length = downloadStream.Read(buffer, 0, bufferSize)) > 0)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        torrentFileStream.Write(buffer, 0, length);
+                    }
+                }
             }
         }
 
@@ -99,7 +106,7 @@ namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
         {
             if (result.Value<string>("status") != "ok")
             {
-                throw new DownloaderException("Cannot add torrent to torrent-client.", DownloaderExceptionStatus.Other);
+                throw new ResourceDownloaderException("Cannot add torrent to torrent-client.");
             }
         }
 
@@ -138,7 +145,7 @@ namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
 
             if (_timeoutWatch.ElapsedMilliseconds > _timeout)
             {
-                throw new TimeoutException("Torrent download has timed out.");
+                throw new ResourceDownloaderException("Torrent download has timed out.");
             }
         }
 
@@ -155,19 +162,19 @@ namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
 
             if (result.Value<string>("status") != "ok")
             {
-                throw new DownloaderException("Invalid torrent-client status - " + result.Value<string>("status"), DownloaderExceptionStatus.Other);
+                throw new ResourceDownloaderException("Invalid torrent-client status - " + result.Value<string>("status"));
             }
 
             if (result["data"].Value<int>("count") < 1)
             {
-                throw new DownloaderException("Torrent download is not listed.", DownloaderExceptionStatus.Other);
+                throw new ResourceDownloaderException("Torrent download is not listed.");
             }
 
             var torrentStatus = result["data"].Value<JArray>("torrents")[0];
 
             if (torrentStatus.Value<string>("error") != string.Empty)
             {
-                throw new DownloaderException(torrentStatus.Value<string>("error"), DownloaderExceptionStatus.Other);
+                throw new ResourceDownloaderException(torrentStatus.Value<string>("error"));
             }
 
             double progress = torrentStatus.Value<double>("progress");
@@ -217,7 +224,7 @@ namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
 
             if (dirFiles.Length < 1)
             {
-                throw new DownloaderException("Missing files in downloaded torrent directory.", DownloaderExceptionStatus.Other);
+                throw new ResourceDownloaderException("Missing files in downloaded torrent directory.");
             }
 
             if (File.Exists(_destinationFilePath))

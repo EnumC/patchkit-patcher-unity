@@ -1,13 +1,13 @@
-﻿namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
+﻿using System.Net;
+
+namespace PatchKit.Unity.Patcher.AppData.Remote.Downloaders
 {
     public interface IHttpWebRequestAdapter
     {
-        IHttpWebResponseAdapter GetResponse();
-
-        string Method { get; set; }
-
-        int Timeout { get; set; }
-
         void AddRange(long start, long end);
+
+        /// <exception cref="WebException">The time-out period for the request expired.</exception>
+        /// <exception cref="WebException">An error occurred while processing the request.</exception>
+        IHttpWebResponseAdapter GetResponse();
     }
 }
