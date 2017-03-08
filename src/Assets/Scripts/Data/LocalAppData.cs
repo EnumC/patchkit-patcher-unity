@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -97,7 +97,12 @@ namespace PatchKit.Unity.Patcher.Data
 
             if (hash != null)
             {
-                // TODO: Check hash
+                string h = HashUtilities.ComputeFileHash(filePath);
+                if (h != hash)
+                {
+                    Debug.Log(string.Format("File {0} has hash code of {1} but {2} expected", fileName, h, hash));
+                    return false;
+                }
             }
 
             return true;
@@ -387,9 +392,12 @@ namespace PatchKit.Unity.Patcher.Data
                 return false;
             }
 
-            foreach (var fileName in contentSummary.Value<JArray>("files").Values<JObject>().Select(o => o.Value<string>("path")))
+            foreach (var file in contentSummary.Value<JArray>("files").Values<JObject>())
             {
-                if (!CheckFile(fileName, versionId))
+                var fileName = file.Value<string>("path");
+                var hashCode = file.Value<string>("hash");
+
+                if (!CheckFile(fileName, versionId, hashCode))
                 {
                     Debug.Log(string.Format("Application data is not consistent because of file {0}", fileName));
                     return false;
