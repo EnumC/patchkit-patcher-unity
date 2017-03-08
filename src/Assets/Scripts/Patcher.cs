@@ -291,11 +291,13 @@ namespace PatchKit.Unity.Patcher
             }
             else
             {
-                var contentSummary = _remoteAppData.GetContentSummary(latestVersionId);
+                // do not do consistency checking before the launching the game because it does
+                // nothing useful currently
+                /*var contentSummary = _remoteAppData.GetContentSummary(latestVersionId);
                 if (!_localAppData.CheckDataConsistency(contentSummary, latestVersionId))
                 {
                     throw new Exception("Corrupted data.");
-                }
+                }*/
             }
         }
 
