@@ -1,0 +1,14 @@
+/.vs/
+/Library/
+/Temp/
+/obj/
+/*.sln
+/*.suo
+/*.csproj
+/*.csproj.user
+/_Resharper.src/
+/app/
+.idea
+*.DotSettings*
+*.CSharp.ruleset
+_ReSharper*
